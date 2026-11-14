@@ -1,0 +1,23 @@
+{
+  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified).",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "agentmux set idle --harness claude --pid $PPID" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "m=$(jq -r '.message // empty'); case $m in *ermission*) r=permission;; *) r=input;; esac; agentmux set waiting --reason $r --msg \"$m\" --harness claude --pid $PPID" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "agentmux set done --harness claude --pid $PPID" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "agentmux clear" }] }
+    ]
+  }
+}
