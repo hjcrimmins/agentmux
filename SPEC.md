@@ -40,7 +40,7 @@ agentmux clear [--pane PANE_ID]
 
 ### 3.2 Arguments
 
-- `--msg TEXT`: short human-readable detail (e.g. the permission request). `--msg -` reads it from stdin. agentmux normalises it: newlines become spaces, it's truncated to 200 characters, and tmux format characters are escaped. [Q-007]
+- `--msg TEXT`: short human-readable detail (e.g. the permission request). `--msg -` reads it from stdin. agentmux normalises it: newlines become spaces, it's truncated to 200 characters, and tmux format characters are escaped. A `;` anywhere in it (including at the end) is stored literally. [Q-007]
 - `--harness NAME`: a short lowercase identifier: `claude`, `pi`, `opencode`, `codex`, …
 - `--pid PID`: PID of the long-lived harness process. agentmux uses it only to drop stale entries if the harness dies without calling `clear`. [Q-005] Adapters **should** pass it.
 - `--pane PANE_ID`: target pane. Defaults to `$TMUX_PANE`. [Q-006]
