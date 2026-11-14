@@ -1,5 +1,5 @@
 {
-  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified).",
+  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified, see Q-015). PostToolUse/PostToolUseFailure set working so an approved permission prompt stops showing waiting once the tool finishes.",
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "agentmux set idle --harness claude --pid $PPID" }] }
@@ -8,6 +8,12 @@
       { "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
     ],
     "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+    ],
+    "PostToolUseFailure": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
     ],
     "Notification": [
