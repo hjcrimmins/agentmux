@@ -50,6 +50,7 @@ Open questions about [SPEC.md](SPEC.md) while it's being iterated on.
 **Context:** `@agent_msg` is displayed through tmux formats, so a message containing `#{…}`, `#(…)` or `#[…]` would be interpreted. `#(…)` would even run a shell command.
 **Options:** (a) escape `#` → `##` on write; (b) strip `#`; (c) escape when displaying.
 **Leaning:** (a). Implemented in v0.
+**Update 2026-11-14:** `;` is a second hazard. All writes from one `set` go to tmux as a single argv chain separated by `;` arguments, and tmux 3.7c treats *any* argument ending in `;` as a separator: `foo;` was stored as `foo`, `a\;` as `a;`, and a lone `;` broke the chain midway (state set, but no msg/pid/ts and no summary refresh). Fixed in the chain builder: an argument ending in `;` is sent with that final `;` written as `\;`, which tmux turns back into exactly the original text (`;` → `\;`, `a\;` → `a\\;`, `;;` → `;\;`). A `;` in the middle needs nothing. This applies to every chained argument, not just `--msg`. It's independent of the `#` → `##` escaping, which still runs first. Covered by `test/core.sh`.
 **Decision:** —
 
 ## Q-008: Option naming

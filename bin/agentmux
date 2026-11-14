@@ -29,12 +29,22 @@ EOF
 # Usage: tmux_chain cmd1 args... ";" cmd2 args...
 tmux_chain() { [ $# -gt 0 ] && tmux "$@"; }
 
-# Unset every per-pane agentmux option on pane $1, appended to the global array CHAIN.
+# Append one tmux command to the global array CHAIN, separated by ";".
+# tmux treats any argument ending in ";" as a command separator (the ";" is
+# dropped) and turns a trailing "\;" into a literal ";". So an argument that
+# ends in ";" is sent with that last ";" written as "\;", which tmux stores as
+# exactly the original text (e.g. "a;" -> "a\;", "a\;" -> "a\\;", ";" -> "\;").
 CHAIN=()
 chain_add() {
+  local a
   if [ ${#CHAIN[@]} -gt 0 ]; then CHAIN+=(";"); fi
-  CHAIN+=("$@")
+  for a in "$@"; do
+    case $a in *';') a="${a%;}\\;" ;; esac
+    CHAIN+=("$a")
+  done
 }
+
+# Unset every per-pane agentmux option on pane $1, appended to CHAIN.
 chain_unset_pane() {
   local p=$1 opt
   for opt in @agent_state @agent_reason @agent_harness @agent_msg @agent_pid @agent_ts; do
@@ -92,11 +102,15 @@ cmd_set() {
   local reason="" msg="" harness="" pid="" pane="${TMUX_PANE:-}"
   while [ $# -gt 0 ]; do
     case $1 in
-      --reason)  reason=${2:-};  shift 2 ;;
-      --msg)     msg=${2:-};     shift 2 ;;
-      --harness) harness=${2:-}; shift 2 ;;
-      --pid)     pid=${2:-};     shift 2 ;;
-      --pane)    pane=${2:-};    shift 2 ;;
+      --reason|--msg|--harness|--pid|--pane)
+        [ $# -ge 2 ] || die "set: $1 needs a value" ;;
+    esac
+    case $1 in
+      --reason)  reason=$2;  shift 2 ;;
+      --msg)     msg=$2;     shift 2 ;;
+      --harness) harness=$2; shift 2 ;;
+      --pid)     pid=$2;     shift 2 ;;
+      --pane)    pane=$2;    shift 2 ;;
       *) die "set: unknown argument '$1'" ;;
     esac
   done
@@ -154,7 +168,7 @@ cmd_clear() {
   local pane="${TMUX_PANE:-}"
   while [ $# -gt 0 ]; do
     case $1 in
-      --pane) pane=${2:-}; shift 2 ;;
+      --pane) [ $# -ge 2 ] || die "clear: $1 needs a value"; pane=$2; shift 2 ;;
       *) die "clear: unknown argument '$1'" ;;
     esac
   done
@@ -170,7 +184,9 @@ cmd_list() {
   local sort=state
   while [ $# -gt 0 ]; do
     case $1 in
-      --sort) sort=${2:-}; shift 2 ;;
+      --sort)
+        [ $# -ge 2 ] || { echo "agentmux: list: $1 needs a value" >&2; exit 2; }
+        sort=$2; shift 2 ;;
       *) echo "agentmux: list: unknown argument '$1'" >&2; exit 2 ;;
     esac
   done
