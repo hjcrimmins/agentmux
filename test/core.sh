@@ -382,17 +382,33 @@ printf '%s ' "$@" >"$REC.args"
 cat >"$REC.stdin"
 EOF
 chmod +x "$STUB/agentmux"
-NCMD=$(jq -r '.hooks.Notification[0].hooks[0].command' "$ROOT/adapters/claude-code/hooks.json")
-notif() {  # notif <json>: prints "<args> | <stdin>" or "not called"
+hookcmd() { jq -r ".hooks.$1[0].hooks[0].command" "$ROOT/adapters/claude-code/hooks.json"; }
+NCMD=$(hookcmd Notification); PRECMD=$(hookcmd PreToolUse); PERMCMD=$(hookcmd PermissionRequest)
+runhook() {  # runhook <command> <json>: prints "<args> | <stdin>" or "not called"
   export REC="$WORK/rec"; rm -f "$REC.args" "$REC.stdin"
-  printf '%s' "$1" | PATH="$STUB:$PATH" "$ASH" -c "$NCMD" >/dev/null 2>&1 || true
+  printf '%s' "$2" | PATH="$STUB:$PATH" "$ASH" -c "$1" >/dev/null 2>&1 || true
   if [ -e "$REC.args" ]; then printf '%s| %s' "$(sed "s/--pid [0-9]* //" "$REC.args")" "$(tr '\n' '/' <"$REC.stdin")"
   else echo "not called"; fi
 }
+notif() { runhook "$NCMD" "$1"; }
 W='set waiting --reason'
 for ASH in /bin/sh $(command -v dash || true); do
-check "adapter [$ASH]: permission_prompt" "$W permission --msg - --harness claude | Claude needs your permission to use Bash/" \
-  "$(notif '{"message":"Claude needs your permission to use Bash","title":"Permission needed","notification_type":"permission_prompt"}')"
+check "adapter [$ASH]: permission_prompt ignored (PermissionRequest covers it)" "not called" \
+  "$(notif '{"message":"Claude needs your permission","title":"Permission needed","notification_type":"permission_prompt"}')"
+check "adapter [$ASH]: PreToolUse tool -> working" "set working --harness claude | " \
+  "$(runhook "$PRECMD" '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}')"
+check "adapter [$ASH]: PreToolUse AskUserQuestion -> waiting/input + question" "$W input --msg - --harness claude | Which colour?/" \
+  "$(runhook "$PRECMD" '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which colour?","header":"c"}]}}')"
+check "adapter [$ASH]: PreToolUse invalid JSON -> working" "set working --harness claude | " "$(runhook "$PRECMD" 'nope')"
+check "adapter [$ASH]: PermissionRequest Bash" "$W permission --msg - --harness claude | Bash(rm -rf .cache)/" \
+  "$(runhook "$PERMCMD" '{"tool_name":"Bash","tool_input":{"command":"rm -rf .cache","description":"x"}}')"
+check "adapter [$ASH]: PermissionRequest Edit" "$W permission --msg - --harness claude | Edit(src/a.py)/" \
+  "$(runhook "$PERMCMD" '{"tool_name":"Edit","tool_input":{"file_path":"src/a.py"}}')"
+check "adapter [$ASH]: PermissionRequest MCP tool, no known field" "$W permission --msg - --harness claude | mcp__x__y()/" \
+  "$(runhook "$PERMCMD" '{"tool_name":"mcp__x__y","tool_input":{"q":1}}')"
+check "adapter [$ASH]: PermissionRequest AskUserQuestion -> input" "$W input --msg - --harness claude | Which colour?/" \
+  "$(runhook "$PERMCMD" '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which colour?"}]}}')"
+check "adapter [$ASH]: PermissionRequest invalid JSON ignored" "not called" "$(runhook "$PERMCMD" 'nope')"
 check "adapter [$ASH]: elicitation_dialog" "$W input --msg - --harness claude | Pick one/" \
   "$(notif '{"message":"Pick one","notification_type":"elicitation_dialog"}')"
 check "adapter [$ASH]: elicitation_url_dialog" "$W input --msg - --harness claude | Open URL/" \
@@ -406,16 +422,16 @@ check "adapter [$ASH]: no type, permission message" "$W permission --msg - --har
   "$(notif '{"message":"Claude needs your permission to use Bash"}')"
 check "adapter [$ASH]: empty type, other message" "$W input --msg - --harness claude | Claude is waiting for your input/" \
   "$(notif '{"message":"Claude is waiting for your input","notification_type":""}')"
-check "adapter [$ASH]: multi-line message, shell chars literal" "$W permission --msg - --harness claude | a \$(touch x) \"q\" 'y'/line2;/" \
-  "$(notif '{"message":"a $(touch x) \"q\" '"'"'y'"'"'\nline2;","notification_type":"permission_prompt"}')"
+check "adapter [$ASH]: multi-line message, shell chars literal" "$W input --msg - --harness claude | a \$(touch x) \"q\" 'y'/line2;/" \
+  "$(notif '{"message":"a $(touch x) \"q\" '"'"'y'"'"'\nline2;","notification_type":"agent_needs_input"}')"
 check "adapter [$ASH]: no message" "$W input --msg - --harness claude | " "$(notif '{"notification_type":"agent_needs_input"}')"
 check "adapter [$ASH]: invalid JSON ignored" "not called" "$(notif 'not json')"
 done
 # end to end with the real CLI (on PATH as `agentmux`), multi-line message flattened
 mkdir -p "$WORK/realbin"; ln -sf "$BIN" "$WORK/realbin/agentmux"
-printf '%s' '{"message":"Claude needs\nyour permission","notification_type":"permission_prompt"}' \
-  | TMUX_PANE=$P1 PATH="$WORK/realbin:$PATH" perl -e 'alarm 5; exec @ARGV' /bin/sh -c "$NCMD"
-check "adapter end to end" "waiting permission claude|Claude needs your permission" \
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git push\n--force"}}' \
+  | TMUX_PANE=$P1 PATH="$WORK/realbin:$PATH" perl -e 'alarm 5; exec @ARGV' /bin/sh -c "$PERMCMD"
+check "adapter end to end" "waiting permission claude|Bash(git push --force)" \
   "$(opt "$P1" @agentmux_state) $(opt "$P1" @agentmux_reason) $(opt "$P1" @agentmux_harness)|$(opt "$P1" @agentmux_msg)"
 AM clear --pane "$P1"
 

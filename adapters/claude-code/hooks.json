@@ -1,29 +1,99 @@
 {
-  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified, see Q-015). PostToolUse/PostToolUseFailure set working so an approved permission prompt stops showing waiting once the tool finishes. Notification maps notification_type (one jq call): permission_prompt -> waiting/permission; elicitation_dialog, elicitation_url_dialog, agent_needs_input -> waiting/input; any other type (idle_prompt, auth_*, quota_*, ...) is ignored, so done stays done. Without notification_type (older Claude Code) the message is matched instead. Commands run under sh -c, so they must stay POSIX sh. Tested by test/core.sh.",
+  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json (or try it with `claude --settings hooks.json`). Requires `agentmux` on PATH and jq. Commands run under sh -c, so they must stay POSIX sh. $PPID is the Claude Code process (verified 2026-11-16, Q-015). PreToolUse: AskUserQuestion -> waiting/input with the question (the dialog is on screen from that moment); any other tool -> working. PermissionRequest fires as the permission dialog opens -> waiting/permission with Tool(command|file|url); AskUserQuestion -> waiting/input. PostToolUse/PostToolUseFailure -> working, which clears waiting once the dialog is answered. Notification: permission_prompt is ignored (it arrives ~6 s late, says only 'Claude needs your permission', and also fires for AskUserQuestion; PermissionRequest/PreToolUse already covered it); elicitation_dialog, elicitation_url_dialog, agent_needs_input -> waiting/input; other types (idle_prompt, auth_*, quota_*, ...) ignored so done stays done. Without notification_type (older Claude Code) the message is matched instead. Tested by test/core.sh.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "agentmux set idle --harness claude --pid $PPID" }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux set idle --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux set working --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "q=$(jq -r 'select(.tool_name == \"AskUserQuestion\") | (.tool_input.questions[0].question // \"Question\")'); if [ -n \"$q\" ]; then printf '%s\\n' \"$q\" | agentmux set waiting --reason input --msg - --harness claude --pid $PPID; else agentmux set working --harness claude --pid $PPID; fi"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o=$(jq -r 'if .tool_name == \"AskUserQuestion\" then \"input\", (.tool_input.questions[0].question // \"Question\") else \"permission\", ((.tool_name // \"tool\") + \"(\" + ((.tool_input.command // .tool_input.file_path // .tool_input.url // .tool_input.pattern // \"\") | tostring | .[0:120]) + \")\") end'); r=$(printf '%s\\n' \"$o\" | head -n 1); [ -z \"$r\" ] || printf '%s\\n' \"$o\" | sed 1d | agentmux set waiting --reason \"$r\" --msg - --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux set working --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "PostToolUseFailure": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux set working --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "o=$(jq -r '(.notification_type // \"\") as $t | (.message // \"\") as $m | (if $t == \"\" then (if ($m | test(\"ermission\")) then \"permission\" else \"input\" end) elif $t == \"permission_prompt\" then \"permission\" elif $t == \"elicitation_dialog\" or $t == \"elicitation_url_dialog\" or $t == \"agent_needs_input\" then \"input\" else \"\" end), $m'); r=$(printf '%s\\n' \"$o\" | head -n 1); [ -z \"$r\" ] || printf '%s\\n' \"$o\" | sed 1d | agentmux set waiting --reason \"$r\" --msg - --harness claude --pid $PPID" }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "o=$(jq -r '(.notification_type // \"\") as $t | (.message // \"\") as $m | (if $t == \"\" then (if ($m | test(\"ermission\")) then \"permission\" else \"input\" end) elif $t == \"elicitation_dialog\" or $t == \"elicitation_url_dialog\" or $t == \"agent_needs_input\" then \"input\" else \"\" end), $m'); r=$(printf '%s\\n' \"$o\" | head -n 1); [ -z \"$r\" ] || printf '%s\\n' \"$o\" | sed 1d | agentmux set waiting --reason \"$r\" --msg - --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "agentmux set done --harness claude --pid $PPID" }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux set done --harness claude --pid $PPID"
+          }
+        ]
+      }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "agentmux clear" }] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentmux clear"
+          }
+        ]
+      }
     ]
   }
 }
