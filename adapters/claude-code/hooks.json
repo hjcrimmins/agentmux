@@ -1,5 +1,5 @@
 {
-  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified, see Q-015). PostToolUse/PostToolUseFailure set working so an approved permission prompt stops showing waiting once the tool finishes.",
+  "_comment": "agentmux adapter for Claude Code. Merge the 'hooks' object into ~/.claude/settings.json. Requires `agentmux` on PATH and jq. $PPID inside a hook command is the Claude Code process (used for stale-state cleanup, Q-005; unverified, see Q-015). PostToolUse/PostToolUseFailure set working so an approved permission prompt stops showing waiting once the tool finishes. Notification maps notification_type (one jq call): permission_prompt -> waiting/permission; elicitation_dialog, elicitation_url_dialog, agent_needs_input -> waiting/input; any other type (idle_prompt, auth_*, quota_*, ...) is ignored, so done stays done. Without notification_type (older Claude Code) the message is matched instead. Commands run under sh -c, so they must stay POSIX sh. Tested by test/core.sh.",
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "agentmux set idle --harness claude --pid $PPID" }] }
@@ -17,7 +17,7 @@
       { "matcher": "*", "hooks": [{ "type": "command", "command": "agentmux set working --harness claude --pid $PPID" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "m=$(jq -r '.message // empty'); case $m in *ermission*) r=permission;; *) r=input;; esac; agentmux set waiting --reason $r --msg \"$m\" --harness claude --pid $PPID" }] }
+      { "hooks": [{ "type": "command", "command": "o=$(jq -r '(.notification_type // \"\") as $t | (.message // \"\") as $m | (if $t == \"\" then (if ($m | test(\"ermission\")) then \"permission\" else \"input\" end) elif $t == \"permission_prompt\" then \"permission\" elif $t == \"elicitation_dialog\" or $t == \"elicitation_url_dialog\" or $t == \"agent_needs_input\" then \"input\" else \"\" end), $m'); r=$(printf '%s\\n' \"$o\" | head -n 1); [ -z \"$r\" ] || printf '%s\\n' \"$o\" | sed 1d | agentmux set waiting --reason \"$r\" --msg - --harness claude --pid $PPID" }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "agentmux set done --harness claude --pid $PPID" }] }

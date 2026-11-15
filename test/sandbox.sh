@@ -4,12 +4,13 @@
 #
 #   test/sandbox.sh [start]   start (restarts if already running)
 #   test/sandbox.sh stop
+#   AGENTMUX_SANDBOX_SOCKET=name test/sandbox.sh [start|stop]   use another socket
 #
 # Then attach from a terminal that is NOT inside tmux:   tmux -L agentmux-test attach
 # (Nested inside your real tmux, prefix keys go to the outer one.)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SOCK=agentmux-test
+SOCK=${AGENTMUX_SANDBOX_SOCKET:-agentmux-test}   # override to run a second sandbox
 T() { tmux -L "$SOCK" "$@"; }
 FAKE="$ROOT/test/fake-agent.sh"
 SH=${SHELL:-/bin/zsh}

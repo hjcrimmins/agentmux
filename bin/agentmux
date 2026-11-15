@@ -2,9 +2,11 @@
 # agentmux: tmux-side state for coding agents. See SPEC.md.
 # Must stay compatible with bash 3.2 (macOS /bin/bash). No `set -u`: empty arrays break it on 3.2.
 
-SPEC_VERSION="0.1.0-draft"
+SPEC_VERSION="0.2.0-draft"
 TAB=$'\t'
 US=$'\x1f'   # unit separator: unlike TAB, IFS does not collapse empty fields
+LOCK=agentmux
+LOCK_WAIT=1  # seconds per wait for the refresh lock (SPEC §4, Q-022)
 
 # SPEC §3.3: never break the caller. Errors go to stderr, exit 0 unless AGENTMUX_STRICT=1.
 die() {
@@ -13,6 +15,9 @@ die() {
   exit 0
 }
 
+# Read verbs (SPEC §7): bad arguments exit 2.
+bad() { echo "agentmux: $*" >&2; exit 2; }
+
 usage() {
   cat <<'EOF'
 usage:
@@ -20,6 +25,7 @@ usage:
                                            [--harness NAME] [--pid PID] [--pane %N]
   agentmux clear [--pane %N]
   agentmux list [--sort state|name|age]
+  agentmux seen [--pane %N]
   agentmux refresh
   agentmux version
 EOF
@@ -44,10 +50,17 @@ chain_add() {
   done
 }
 
-# Unset every per-pane agentmux option on pane $1, appended to CHAIN.
+# Set pane option $2 on pane $1 to $3, or unset it when $3 is empty (SPEC §3.2, Q-016).
+chain_set_pane() {
+  if [ -n "$3" ]; then chain_add set -p -t "$1" "$2" "$3"
+  else chain_add set -pu -t "$1" "$2"; fi
+}
+
+# Unset every per-pane agentmux option on pane $1 (harness- and UI-owned), appended to CHAIN.
 chain_unset_pane() {
   local p=$1 opt
-  for opt in @agent_state @agent_reason @agent_harness @agent_msg @agent_pid @agent_ts; do
+  for opt in @agentmux_state @agentmux_reason @agentmux_harness @agentmux_msg @agentmux_pid \
+             @agentmux_ts @agentmux_seen_ts; do
     chain_add set -pu -t "$p" "$opt"
   done
 }
@@ -58,6 +71,42 @@ pid_alive() {
   ps -p "$1" >/dev/null 2>&1           # kill -0 fails with EPERM for other users' processes
 }
 
+# ---------------------------------------------------------------- refresh lock (Q-022)
+# `tmux wait-for -L` blocks forever, and a holder that dies leaves the lock held. So the
+# lock is taken by a background waiter that reports through a pipe, and we wait for it
+# with `read -t`. On timeout the lock is assumed stale: we release it (-U hands it to the
+# next waiter, normally ours) and wait once more. If that also times out we go ahead
+# without the lock. The waiter is never killed: tmux would hand the lock to the dead
+# client later and it would stay held. Instead, if nobody reads its report any more
+# (we exited), it releases the lock itself.
+LOCKED=0
+LOCK_FD_OPEN=0
+lock_acquire() {
+  local line=""
+  exec 3< <(
+    trap '' PIPE
+    if tmux wait-for -L "$LOCK" 2>/dev/null; then
+      echo locked 2>/dev/null || tmux wait-for -U "$LOCK" 2>/dev/null
+    else
+      echo failed 2>/dev/null
+    fi
+  )
+  LOCK_FD_OPEN=1
+  if ! read -t "$LOCK_WAIT" -u 3 line; then
+    tmux wait-for -U "$LOCK" 2>/dev/null          # stale holder: release and retry once
+    read -t "$LOCK_WAIT" -u 3 line || line=""
+  fi
+  [ "$line" = locked ] && LOCKED=1
+  exec 3<&-; LOCK_FD_OPEN=0
+}
+lock_release() {
+  if [ "$LOCK_FD_OPEN" = 1 ]; then exec 3<&-; LOCK_FD_OPEN=0; fi
+  if [ "$LOCKED" = 1 ]; then LOCKED=0; tmux wait-for -U "$LOCK" 2>/dev/null; fi
+  return 0
+}
+trap lock_release EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 142' ALRM
+
 # Ask every attached client to redraw its status line.
 redraw_status() {
   local c
@@ -66,36 +115,79 @@ redraw_status() {
   done
 }
 
+# 1 if the pane is unseen (SPEC §5.1): done/waiting and seen_ts unset or older than ts.
+is_unseen() {  # is_unseen <state> <ts> <seen_ts>
+  case $1 in done|waiting) ;; *) return 1 ;; esac
+  [ -z "$3" ] && return 0
+  [ -n "$2" ] && [ "$3" -lt "$2" ] 2>/dev/null
+}
+
 # Drop stale entries (dead pid), recompute @agentmux_summary and @agentmux_counts.
 cmd_refresh() {
-  local w=0 k=0 d=0 i=0 id state pid
+  local w=0 k=0 d=0 i=0 id state pid ts seen
+  lock_acquire
   CHAIN=()
-  while IFS="$US" read -r id state pid; do
+  while IFS="$US" read -r id state pid ts seen; do
     [ -z "$state" ] && continue
     if ! pid_alive "$pid"; then chain_unset_pane "$id"; continue; fi
     case $state in
-      waiting) w=$((w+1)) ;; working) k=$((k+1)) ;; done) d=$((d+1)) ;; idle) i=$((i+1)) ;;
+      waiting) w=$((w+1)) ;;
+      working) k=$((k+1)) ;;
+      done)    if is_unseen done "$ts" "$seen"; then d=$((d+1)); else i=$((i+1)); fi ;;
+      idle)    i=$((i+1)) ;;
     esac
-  done < <(tmux list-panes -a -F "#{pane_id}${US}#{@agent_state}${US}#{@agent_pid}" 2>/dev/null)
+  done < <(tmux list-panes -a -F "#{pane_id}${US}#{@agentmux_state}${US}#{@agentmux_pid}${US}#{@agentmux_ts}${US}#{@agentmux_seen_ts}" 2>/dev/null)
+
+  # Configuration (SPEC §5.2), read in one round trip. Empty style = default.
+  local sw sk sd si show_idle
+  IFS="$US" read -r sw sk sd si show_idle < <(tmux display -p \
+    "#{@agentmux_style_waiting}${US}#{@agentmux_style_working}${US}#{@agentmux_style_done}${US}#{@agentmux_style_idle}${US}#{@agentmux_show_idle}" 2>/dev/null)
+  sw=${sw:-fg=red,bold}; sk=${sk:-fg=yellow}; sd=${sd:-fg=green}; si=${si:-fg=colour244}
 
   local s=""
-  [ $w -gt 0 ] && s="${s}#[fg=red,bold]● ${w} waiting#[default]  "
-  [ $k -gt 0 ] && s="${s}#[fg=yellow]… ${k} working#[default]  "
-  [ $d -gt 0 ] && s="${s}#[fg=green]✓ ${d} done#[default]  "
+  [ $w -gt 0 ] && s="${s}#[${sw}]● ${w} waiting#[default]  "
+  [ $k -gt 0 ] && s="${s}#[${sk}]… ${k} working#[default]  "
+  [ $d -gt 0 ] && s="${s}#[${sd}]✓ ${d} done#[default]  "
+  [ $i -gt 0 ] && [ "$show_idle" = on ] && s="${s}#[${si}]○ ${i} idle#[default]  "
   chain_add set -g @agentmux_summary "$s"
   chain_add set -g @agentmux_counts "$w $k $d $i"
   tmux_chain "${CHAIN[@]}"
+  lock_release
   redraw_status
 }
 
 notify() {  # notify <title> <body>
   [ "$(uname)" = Darwin ] || return 0
-  osascript -e 'on run argv' \
-            -e 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"' \
-            -e 'end run' "$1" "$2" >/dev/null 2>&1 &
+  local sound
+  sound=$(tmux show -gv @agentmux_sound 2>/dev/null) || sound=Glass   # unset -> Glass, empty -> silent
+  if [ -n "$sound" ]; then
+    osascript -e 'on run argv' \
+              -e 'display notification (item 2 of argv) with title (item 1 of argv) sound name (item 3 of argv)' \
+              -e 'end run' "$1" "$2" "$sound" >/dev/null 2>&1 &
+  else
+    osascript -e 'on run argv' \
+              -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+              -e 'end run' "$1" "$2" >/dev/null 2>&1 &
+  fi
+}
+
+# SPEC §3.3: "not in tmux" is decided before any validation, so malformed calls are
+# silent outside tmux too. Succeeds if a target pane is known: $TMUX_PANE or `--pane X`.
+has_pane() {
+  [ -n "${TMUX_PANE:-}" ] && return 0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --pane) [ $# -ge 2 ] && [ -n "$2" ] && return 0; shift ;;
+      --reason|--msg|--harness|--pid) [ $# -ge 2 ] && shift 2 || shift ;;
+      *) shift ;;
+    esac
+  done
+  return 1
 }
 
 cmd_set() {
+  has_pane "$@" || exit 0                                   # not in tmux: silent no-op
+  [ $# -ge 1 ] || die "set: missing state"
   local state=$1; shift
   case $state in idle|working|waiting|done) ;; *) die "set: invalid state '$state'" ;; esac
 
@@ -114,7 +206,6 @@ cmd_set() {
       *) die "set: unknown argument '$1'" ;;
     esac
   done
-  [ -z "$pane" ] && exit 0                                  # not in tmux: silent no-op
   [[ $pane =~ ^%[0-9]+$ ]] || die "set: invalid pane '$pane'"
   [ -z "$pid" ] || [[ $pid =~ ^[0-9]+$ ]] || die "set: invalid pid '$pid'"
   [[ $harness =~ ^[a-z0-9_.-]*$ ]] || die "set: invalid harness name '$harness'"
@@ -123,7 +214,7 @@ cmd_set() {
     [ -z "$reason" ] && reason=input
     case $reason in permission|input) ;; *) die "set: invalid reason '$reason'" ;; esac
   else
-    reason=""
+    reason=""                                                # Q-017: only waiting has a reason
   fi
 
   [ "$msg" = "-" ] && msg=$(cat)
@@ -134,17 +225,19 @@ cmd_set() {
   # Previous state + whether the pane is on screen right now (one round trip).
   local info prev visible where
   info=$(tmux display -p -t "$pane" \
-    "#{@agent_state}${US}#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}${US}#{session_name}:#{window_name}" 2>/dev/null) \
+    "#{@agentmux_state}${US}#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}${US}#{session_name}:#{window_name}" 2>/dev/null) \
     || die "set: no such pane '$pane'"
   IFS="$US" read -r prev visible where <<<"$info"
 
+  # Q-016: a set describes the whole state; unpassed fields are unset in the same chain.
+  # @agentmux_seen_ts is UI-owned and left alone.
   CHAIN=()
-  chain_add set -p -t "$pane" @agent_state   "$state"
-  chain_add set -p -t "$pane" @agent_reason  "$reason"
-  chain_add set -p -t "$pane" @agent_harness "$harness"
-  chain_add set -p -t "$pane" @agent_msg     "$msg"
-  chain_add set -p -t "$pane" @agent_pid     "$pid"
-  chain_add set -p -t "$pane" @agent_ts      "$(date +%s)"
+  chain_add set -p -t "$pane" @agentmux_state "$state"
+  chain_set_pane "$pane" @agentmux_reason  "$reason"
+  chain_set_pane "$pane" @agentmux_harness "$harness"
+  chain_set_pane "$pane" @agentmux_msg     "$msg"
+  chain_set_pane "$pane" @agentmux_pid     "$pid"
+  chain_add set -p -t "$pane" @agentmux_ts "$(date +%s)"
   tmux_chain "${CHAIN[@]}" || die "set: tmux failed"
 
   cmd_refresh
@@ -165,6 +258,7 @@ cmd_set() {
 }
 
 cmd_clear() {
+  has_pane "$@" || exit 0                                   # not in tmux: silent no-op
   local pane="${TMUX_PANE:-}"
   while [ $# -gt 0 ]; do
     case $1 in
@@ -172,50 +266,65 @@ cmd_clear() {
       *) die "clear: unknown argument '$1'" ;;
     esac
   done
-  [ -z "$pane" ] && exit 0
   [[ $pane =~ ^%[0-9]+$ ]] || die "clear: invalid pane '$pane'"
   CHAIN=(); chain_unset_pane "$pane"
   tmux_chain "${CHAIN[@]}" 2>/dev/null
   cmd_refresh
 }
 
-# TSV: pane_id state reason harness location msg age path
+# UI verb (SPEC §5.1): the user has seen pane's current state. Exit 2 on bad arguments.
+cmd_seen() {
+  local pane="${TMUX_PANE:-}"
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --pane) [ $# -ge 2 ] || bad "seen: $1 needs a value"; pane=$2; shift 2 ;;
+      *) bad "seen: unknown argument '$1'" ;;
+    esac
+  done
+  [ -n "$pane" ] || bad "seen: no pane (use --pane or run inside tmux)"
+  [[ $pane =~ ^%[0-9]+$ ]] || bad "seen: invalid pane '$pane'"
+  tmux set -p -t "$pane" @agentmux_seen_ts "$(date +%s)" 2>/dev/null || bad "seen: no such pane '$pane'"
+  cmd_refresh
+}
+
+# TSV: pane_id state reason harness location msg age path seen
 cmd_list() {
   local sort=state
   while [ $# -gt 0 ]; do
     case $1 in
-      --sort)
-        [ $# -ge 2 ] || { echo "agentmux: list: $1 needs a value" >&2; exit 2; }
-        sort=$2; shift 2 ;;
-      *) echo "agentmux: list: unknown argument '$1'" >&2; exit 2 ;;
+      --sort) [ $# -ge 2 ] || bad "list: $1 needs a value"; sort=$2; shift 2 ;;
+      *) bad "list: unknown argument '$1'" ;;
     esac
   done
-  case $sort in state|name|age) ;; *) echo "agentmux: list: invalid sort '$sort'" >&2; exit 2 ;; esac
+  case $sort in state|name|age) ;; *) bad "list: invalid sort '$sort'" ;; esac
 
   cmd_refresh   # drop stale entries first
   local now; now=$(date +%s)
-  tmux list-panes -a -F "#{pane_id}${TAB}#{@agent_state}${TAB}#{@agent_reason}${TAB}#{@agent_harness}${TAB}#{session_name}:#{window_index}.#{pane_index}${TAB}#{@agent_msg}${TAB}#{@agent_ts}${TAB}#{pane_current_path}" \
+  tmux list-panes -a -F "#{pane_id}${TAB}#{@agentmux_state}${TAB}#{@agentmux_reason}${TAB}#{@agentmux_harness}${TAB}#{session_name}:#{window_index}.#{pane_index}${TAB}#{@agentmux_msg}${TAB}#{@agentmux_ts}${TAB}#{pane_current_path}${TAB}#{@agentmux_seen_ts}" \
   | awk -F "$TAB" -v OFS="$TAB" -v now="$now" -v sort="$sort" '
       $2 == "" { next }
       {
         gsub(/##/, "#", $6)                                   # unescape for display
-        rank = ($2=="waiting") ? 0 : ($2=="done") ? 1 : ($2=="working") ? 2 : 3
+        # SPEC §5.1: unseen = done/waiting and seen_ts unset or older than ts
+        unseen = ($2 == "done" || $2 == "waiting") && ($9 == "" || $9 + 0 < $7 + 0)
+        rank = ($2 == "waiting") ? 0 : ($2 == "done" && unseen) ? 1 : ($2 == "working") ? 2 : 3
         age = ($7 == "") ? 0 : now - $7
         if (sort == "state") key = sprintf("%d %012d", rank, 999999999999 - age)
         else if (sort == "age") key = sprintf("%012d", age)
         else key = $5
-        print key, $1, $2, $3, $4, $5, $6, age, $8
+        print key, $1, $2, $3, $4, $5, $6, age, $8, (unseen ? 0 : 1)
       }' \
   | sort -t "$TAB" -k1,1 \
   | cut -f2-
 }
 
 case ${1:-} in
-  set)     shift; [ $# -ge 1 ] || die "set: missing state"; cmd_set "$@" ;;
+  set)     shift; cmd_set "$@" ;;
   clear)   shift; cmd_clear "$@" ;;
   list)    shift; cmd_list "$@" ;;
-  refresh) shift; cmd_refresh ;;
-  version) echo "$SPEC_VERSION" ;;
+  seen)    shift; cmd_seen "$@" ;;
+  refresh) shift; [ $# -eq 0 ] || bad "refresh: unexpected argument '$1'"; cmd_refresh ;;
+  version) shift; [ $# -eq 0 ] || bad "version: unexpected argument '$1'"; echo "$SPEC_VERSION" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

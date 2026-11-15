@@ -3,8 +3,13 @@
 # An fzf list in a side popup. Moving the cursor switches the *real* client to that
 # agent's pane underneath the popup, so you see it live. enter = stay, esc = go back.
 #
-# Runs inside `display-popup`. There, $TMUX_PANE is the pane you opened it from and
-# `tmux display -p` resolves to your client (verified on tmux 3.7, see NOTES.md).
+# Runs inside `display-popup`. There, `tmux display -p` resolves to your client, but
+# $TMUX_PANE is NOT reliably the pane you opened it from (see NOTES.md). The origin pane is
+# worked out as client -> client_session -> that session's active pane instead.
+#
+# While open it sets the global @agentmux_peeking (to the client name) so the pane-focus-in
+# hook doesn't mark agents seen just because the cursor passed over them; it's unset on
+# every exit path. `enter` marks the landed-on agent seen with `agentmux seen` (SPEC §5.1).
 #
 #   peek.sh                 launch the picker (what the key binding runs)
 #   peek.sh _rows           print fzf rows       (internal, called by fzf)
@@ -35,7 +40,8 @@ rows() {
     {
       st = $2
       if      (st == "waiting") { c = "\033[1;31m"; i = "●" }
-      else if (st == "done")    { c = "\033[32m";   i = "✓" }
+      else if (st == "done" && $9 == "0") { c = "\033[1;32m"; i = "✓" }   # unseen done
+      else if (st == "done")    { c = "\033[2;32m"; i = "✓" }             # seen done: dimmed
       else if (st == "working") { c = "\033[33m";   i = "…" }
       else                      { c = "\033[90m";   i = "○" }
       label = (st == "waiting" && $3 == "permission") ? "permit" : st
@@ -52,7 +58,8 @@ detail() {
   # \037 separator: with IFS=TAB, bash would collapse empty fields (e.g. no reason)
   row=$("$BIN" list | awk -F "$TAB" -v OFS=$'\037' -v p="$p" '$1==p { $1=$1; print }')
   [ -z "$row" ] && { echo "(agent gone, ctrl-r to refresh)"; return; }
-  IFS=$'\037' read -r _ st reason harness loc msg age path <<<"$row"
+  IFS=$'\037' read -r _ st reason harness loc msg age path seen <<<"$row"
+  [ "$st" = done ] && [ "$seen" = 1 ] && st="done (seen)"
   local where; where=$(tmux display -p -t "$p" '#{session_name} › #{window_name}' 2>/dev/null)
   printf '\033[1m%s\033[0m%s · %s · %s ago\n' "$st" "${reason:+ ($reason)}" "${harness:-?}" \
          "$( [ "$age" -lt 60 ] && echo "${age}s" || { [ "$age" -lt 3600 ] && echo "$((age/60))m" || echo "$((age/3600))h"; } )"
@@ -143,9 +150,14 @@ esac
 command -v fzf >/dev/null || { echo "fzf not found"; read -r -n1; exit 1; }
 
 PEEK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agentmux-peek.XXXXXX")
-trap 'rm -rf "$PEEK_DIR"' EXIT
 export PEEK_DIR
 PEEK_CLIENT=$(tmux display -p '#{client_name}'); export PEEK_CLIENT
+# Q-013: suspend focus-based "seen" while peeking. Must be unset on every exit path,
+# or normal focus tracking would stay off.
+unpeek() { tmux set -gu @agentmux_peeking 2>/dev/null; }
+trap 'unpeek; rm -rf "$PEEK_DIR"' EXIT
+trap 'exit 130' INT; trap 'exit 129' HUP; trap 'exit 143' TERM
+tmux set -g @agentmux_peeking "$PEEK_CLIENT"
 # Don't trust $TMUX_PANE inside a popup: on tmux 3.7 it was not the pane the client was on
 # (see NOTES.md). Ask for the client's session, then that session's active pane.
 ORIG_SESSION_NAME=$(tmux list-clients -F '#{client_name}	#{client_session}' | awk -F '\t' -v c="$PEEK_CLIENT" '$1==c{print $2}')
@@ -181,6 +193,9 @@ sel=$("$SELF" _rows | fzf --ansi --delimiter "$TAB" --with-nth 2.. --no-sort --h
 
 if [ -n "$sel" ]; then
   restore_and_land "$sel"                 # enter: stay on the selected pane
+  unpeek
+  "$BIN" seen --pane "$sel" 2>/dev/null   # landing on it counts as seeing it (SPEC §5.1)
 else
   restore_and_land "$ORIGIN"              # esc/q: back to where you were
+  unpeek
 fi
