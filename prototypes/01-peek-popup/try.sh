@@ -9,8 +9,11 @@ ROOT="$(cd "$DIR/../.." && pwd)"
 "$ROOT/test/sandbox.sh"
 T() { tmux -L agentmux-test "$@"; }
 
-# Move the tree fallback to `t`, then take over `a`.
+# Move the tree fallback to `t` (tmux's clock-mode by default, so free it first; agentmux
+# leaves already-bound keys alone, Q-019), then take over `a`. Re-running agentmux.tmux
+# drops its own old binding on `a`.
 T set -g @agentmux_key_tree t
+T unbind t
 T run-shell "$ROOT/agentmux.tmux"
 T bind a run-shell -b "$DIR/open.sh '#{client_name}' '#{client_width}' '#{client_height}'"
 

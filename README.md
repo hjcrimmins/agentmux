@@ -15,6 +15,39 @@ harness hook ──▶ agentmux set waiting ──▶ tmux pane options (in the 
 
 - **Push only:** each harness reports its own state through a tiny adapter. agentmux never scrapes panes.
 - **No daemon:** `agentmux` is a short-lived CLI. State lives in tmux and disappears with its pane.
+- **The harness owns the state, you own "seen":** a `done` agent stays `done` until its harness pushes something else. Separately, agentmux remembers whether you've *seen* it (`@agentmux_seen_ts`): focusing the pane, or pressing `enter` on it in the picker, marks it seen. The status bar counts only **unseen** `done` agents; ones you've already looked at count as idle. Scrolling past an agent in the peek picker doesn't count as seeing it.
+
+## Install (your own tmux)
+
+```tmux
+# ~/.tmux.conf
+run-shell '/path/to/agentmux/agentmux.tmux'
+set -g status-right '#{@agentmux_summary}%H:%M'   # put the summary where you want it
+```
+
+agentmux doesn't touch your `status-right`: add `#{@agentmux_summary}` to it yourself (or to your theme's equivalent). For a harness, install its adapter, e.g. merge `adapters/claude-code/hooks.json` into `~/.claude/settings.json`, with `bin/agentmux` on your `PATH`.
+
+**`focus-events`:** seen-tracking uses a `pane-focus-in` hook, which needs `focus-events on`. `agentmux.tmux` turns it on while `@agentmux_track_seen` is `on` (the default). Set it to `off` before `agentmux.tmux` runs to leave `focus-events` alone; then only `enter` in the picker marks agents seen.
+
+### Options
+
+Set these before the `run-shell` line (`set -g @agentmux_… value`). Most are read on every refresh; the key options when `agentmux.tmux` runs.
+
+| Option | Default | |
+|---|---|---|
+| `@agentmux_notify` | `on` | `off` disables desktop notifications |
+| `@agentmux_sound` | `Glass` | macOS notification sound; empty (`''`) for silent |
+| `@agentmux_track_seen` | `on` | Mark agents seen on pane focus (turns on `focus-events`) |
+| `@agentmux_show_idle` | `off` | `on` adds `○ N idle` to the summary (otherwise it's empty when nothing needs you) |
+| `@agentmux_style_waiting` | `fg=red,bold` | tmux style of each summary segment |
+| `@agentmux_style_working` | `fg=yellow` | |
+| `@agentmux_style_done` | `fg=green` | |
+| `@agentmux_style_idle` | `fg=colour244` | |
+| `@agentmux_key_tree` | `a` | `prefix` key for the agents tree view; empty disables |
+| `@agentmux_key_waiting` | `A` | `prefix` key for the waiting-only view; empty disables |
+| `@agentmux_key_force` | `off` | agentmux won't replace a key you've already bound (it shows a message and skips it) unless this is `on` |
+
+Messages are stored escaped (`#` → `##`); show them in your own formats with `#{E:@agentmux_msg}`. `agentmux list` prints a TSV of agents (its last column, `seen`, is `1`/`0`). See [SPEC.md](SPEC.md) for the full interface.
 
 ## Try it (sandbox, doesn't touch your real tmux)
 

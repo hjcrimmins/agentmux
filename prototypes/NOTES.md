@@ -27,7 +27,7 @@ Tested with a pty-attached client (`script`) driven by scripted keystrokes.
 - **`$TMUX_PANE` inside a popup is not the pane the client was on.** It reported `%0` while the client was on `%2`. The picker now works out the origin as *client → client_session → that session's active pane*. Worth remembering for any popup-based UI.
 - **Formats aren't expanded in `display-popup`'s shell command** when it's launched from the CLI. Inside the popup, `tmux display -p '#{client_name}'` does resolve to the right client, so the picker queries tmux itself.
 - **Peeking has side effects on tmux state:** session current window, window active pane and client last-session. Restore handles the first two and last-session for `enter`. **Not restored:** each session's *last-window* history (`prefix l`), and on `esc`, last-session when you started with none.
-- **Peeking acknowledges `done`:** the `pane-focus-in` hook (Q-003) turns `done` into `idle` as soon as you merely peek at it. Probably wrong. Peeking isn't reading. → Q-013.
+- **Peeking acknowledges `done`:** the `pane-focus-in` hook (Q-003) turns `done` into `idle` as soon as you merely peek at it. Probably wrong. Peeking isn't reading. → Q-013. *Fixed in iteration 6.*
 - fzf ≥ 0.59 is needed for `--no-input`, `show-input` and `--gutter`.
 
 ### Iteration 2 (2026-11-14): clipping
@@ -56,6 +56,15 @@ A column header (`STATE  HARNESS  WHERE  AGE  MESSAGE`) is emitted as the first 
 - `display-popup -y` is the popup's **bottom** edge; `-y 0` is clamped to the top row.
 - `-x R` tracked the right edge of the **current pane**, not the terminal: in a split window the side popup landed in the middle of the screen. Now `x = client_width − width` is computed explicitly.
 **Verified** in a pty: 102×61 → top strip rows 1–24, full width; 160×50 → side popup at columns 89–160, both in a split window and a single-pane one.
+
+### Iteration 6 (2026-11-16): spec 0.2.0, "seen" is separate from state
+- Options renamed `@agent_*` → `@agentmux_*` (Q-008).
+- tmux no longer rewrites `done` → `idle` on focus (Q-003). Instead the focus hook runs `agentmux seen`, which sets `@agentmux_seen_ts`; the summary counts only unseen `done`.
+- The picker sets the global `@agentmux_peeking` (client name) while open, so moving the cursor doesn't mark anything seen; it's unset on every exit (EXIT trap, plus explicitly after `enter`/`esc`). `enter` runs `agentmux seen --pane <target>` after landing (Q-013).
+- Seen `done` rows are dimmed; unseen `done` rows are bold green. The details pane says `done (seen)`.
+- `try.sh` now unbinds tmux's default `prefix t` (clock-mode) before moving the tree view there, since agentmux leaves already-bound keys alone (Q-019).
+- Verified in `test/core.sh` with a pty-attached client: picker sets the flag, peeking past an agent leaves it unseen, `enter` marks the landed-on agent seen, and `esc`/killing the picker both unset the flag.
+- **Gotcha:** `pane-focus-in` only fires for a pane an attached client is looking at (no hook headlessly with no client), and the hook runs asynchronously after the command that changed focus. So a focus change made by the picker's restore can, in principle, be processed after the flag is unset; at worst that marks the origin pane seen, where you were anyway.
 
 ### Still needs a human (things a pty test can't judge)
 - [ ] Does peeking *feel* good, or is the switching visually jarring? Any flicker?
