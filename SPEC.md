@@ -3,7 +3,7 @@
 **Version:** 0.2.0-draft
 **Status:** DRAFT. Expect breaking changes. Unresolved points are tracked in [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) and referenced inline as `[Q-NNN]`.
 
-**Changes from 0.1.0:** per-pane options renamed `@agent_*` → `@agentmux_*` [Q-008]; "seen" is now a separate, UI-owned fact and tmux never rewrites the harness's state [Q-003, Q-013]; `set` replaces every field [Q-016]; new `seen` verb; `list` gained a `seen` column; refresh is serialised [Q-022]; colours, sound, keys and idle display are configurable [Q-019–Q-021].
+**Changes from 0.1.0:** per-pane options renamed `@agent_*` → `@agentmux_*` [Q-008]; "seen" is now a separate, UI-owned fact and tmux never rewrites the harness's state [Q-003, Q-013]; `set` replaces every field [Q-016]; new `seen` verb; `list` gained a `seen` column; refresh is serialised [Q-022]; colours, keys and idle display are configurable [Q-019–Q-021]; desktop notifications removed [Q-004].
 
 ## 1. Purpose
 
@@ -15,8 +15,8 @@ There are two parts with one boundary between them.
 
 | Side | Owns | Does not do |
 |---|---|---|
-| **Harness adapter** (Claude Code hook, pi extension, opencode plugin, …) | Deciding *when* the agent's state changes and **pushing** it via `agentmux set` / `agentmux clear` | Any tmux knowledge, UI or notification policy |
-| **agentmux (tmux side)** | Storing state, recording what the user has seen, the status-bar summary, notifications, the agents view, jumping | Detecting, guessing or rewriting state. It never scrapes panes or watches processes to infer state, and never writes `@agentmux_state`. |
+| **Harness adapter** (Claude Code hook, pi extension, opencode plugin, …) | Deciding *when* the agent's state changes and **pushing** it via `agentmux set` / `agentmux clear` | Any tmux knowledge or UI |
+| **agentmux (tmux side)** | Storing state, recording what the user has seen, the status-bar summary, the agents view, jumping | Detecting, guessing or rewriting state. It never scrapes panes or watches processes to infer state, and never writes `@agentmux_state`. |
 
 **Push only.** If a harness doesn't push, its pane isn't an agent as far as agentmux is concerned.
 
@@ -61,7 +61,7 @@ agentmux clear [--pane PANE_ID]
 
 - **No daemon.** `agentmux` is a short-lived CLI. The tmux server is the only long-running process.
 - `agentmux.tmux` runs once when tmux loads its config. It registers key bindings and tmux hooks, then exits. Paths it embeds in hooks and bindings are quoted so that spaces, `'` and `#` in the install path work.
-- A harness event runs `agentmux set|clear`. That writes the pane options, recomputes the summary, refreshes status lines and possibly sends a notification.
+- A harness event runs `agentmux set|clear`. That writes the pane options, recomputes the summary and refreshes status lines.
 - When a pane exits or is killed, tmux hooks run `agentmux refresh`.
 - When a pane gains focus, a tmux hook runs `agentmux seen` for it, unless a picker is peeking or seen-tracking is off (§5.1).
 - **Refresh is serialised.** Recomputing the summary (read every pane, write the global options) runs under the tmux lock `wait-for -L agentmux` / `-U`, so two concurrent `set`s can't leave a stale summary. The wait is bounded (about 1 s). On timeout the lock is assumed stale (a holder died), it is released, and the refresh proceeds. [Q-022]
@@ -117,8 +117,6 @@ Focus tracking needs `focus-events on`, which `agentmux.tmux` turns on while `@a
 
 | Option | Default | Meaning |
 |---|---|---|
-| `@agentmux_notify` | `on` | `off` disables desktop notifications |
-| `@agentmux_sound` | `Glass` | Notification sound name; empty for silent |
 | `@agentmux_track_seen` | `on` | See §5.1 |
 | `@agentmux_show_idle` | `off` | `on` adds `○ N idle` to the summary. Otherwise a summary with only idle (and seen-done) agents is empty. [Q-021] |
 | `@agentmux_style_waiting` | `fg=red,bold` | tmux style for each summary segment [Q-020] |
@@ -133,11 +131,7 @@ Options are read when used, so most take effect on the next refresh; key options
 
 ## 6. Notifications [Q-004]
 
-On a transition into `waiting` or `done`, agentmux sends a desktop notification, unless:
-- `@agentmux_notify` is `off`, or
-- the pane is currently visible: it's the active pane of the active window of a session with an attached client.
-
-On macOS this uses `osascript`, with `@agentmux_sound`.
+None. agentmux never sends desktop notifications, sounds or bells; attention is shown only in the status bar and the agents view. Adapters must not add notifications either. (A harness's own notification settings, e.g. Claude Code's, are outside agentmux and left as the user configured them.)
 
 ## 7. Read and UI interface (for UIs and scripts)
 

@@ -25,10 +25,10 @@ Open questions about [SPEC.md](SPEC.md) while it's being iterated on.
 **Decision (2026-11-16):** (d). `@agentmux_state` is written only by the harness, so `done` stays `done` until the harness pushes again. The UI owns a separate `@agentmux_seen_ts`; "unseen done" = `done` and `seen_ts` older than `@agentmux_ts`. Seen is marked by `enter` in the picker, or by normal focus while not peeking. The summary counts only unseen done. See SPEC §5.1.
 
 ## Q-004: Who owns notifications?
-**Status:** leaning
-**Context:** Harnesses could notify themselves, or just report state and let agentmux apply one policy.
-**Leaning:** agentmux. Adapters stay small and notification behaviour is the same across harnesses. Open sub-questions: rate-limiting, click-to-jump (needs `terminal-notifier`), Linux support.
-**Decision:** —
+**Status:** decided
+**Context:** Harnesses could notify themselves, or just report state and let agentmux apply one policy. v0 sent macOS desktop notifications (`osascript`) on transitions into `waiting`/`done`, skipped for visible panes, with `@agentmux_notify` and `@agentmux_sound` options.
+**Leaning (until 2026-11-16):** agentmux.
+**Decision (2026-11-16):** no notifications in agentmux at all; the feature and its options were removed. The user doesn't want desktop notifications, and the status bar plus the agents view are the whole attention surface. This also drops the per-`set` visibility lookup and the open sub-questions (rate-limiting, click-to-jump, Linux). Adapters must not notify either.
 
 ## Q-005: Stale state when a harness crashes
 **Status:** decided
@@ -128,6 +128,7 @@ Open questions about [SPEC.md](SPEC.md) while it's being iterated on.
 **Status:** decided
 **Context:** Summary colours and the "Glass" notification sound were hard-coded.
 **Decision (2026-11-16):** options `@agentmux_style_{waiting,working,done,idle}` and `@agentmux_sound`, with the current values as defaults.
+**Update 2026-11-16:** `@agentmux_sound` removed along with notifications (Q-004).
 
 ## Q-021: Showing idle agents in the summary
 **Status:** decided

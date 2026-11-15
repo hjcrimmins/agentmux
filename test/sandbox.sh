@@ -29,7 +29,6 @@ set -g status-left '#[bold] #S #[default] '
 set -g status-left-length 30
 set -g status-right '#{@agentmux_summary}#[fg=#565f89]sandbox %H:%M '
 set -g status-right-length 120
-set -g @agentmux_notify on
 bind -r h select-pane -L
 bind -r j select-pane -D
 bind -r k select-pane -U

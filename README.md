@@ -35,8 +35,6 @@ Set these before the `run-shell` line (`set -g @agentmux_… value`). Most are r
 
 | Option | Default | |
 |---|---|---|
-| `@agentmux_notify` | `on` | `off` disables desktop notifications |
-| `@agentmux_sound` | `Glass` | macOS notification sound; empty (`''`) for silent |
 | `@agentmux_track_seen` | `on` | Mark agents seen on pane focus (turns on `focus-events`) |
 | `@agentmux_show_idle` | `off` | `on` adds `○ N idle` to the summary (otherwise it's empty when nothing needs you) |
 | `@agentmux_style_waiting` | `fg=red,bold` | tmux style of each summary segment |

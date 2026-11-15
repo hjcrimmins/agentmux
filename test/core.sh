@@ -46,7 +46,6 @@ wait_for() {  # wait_for <expected> <cmd...>: poll up to ~2s until cmd prints ex
 
 # Make the CLI talk to the CI server as if running inside one of its panes.
 export TMUX="$(T display -p '#{socket_path}'),0,0"
-T set -g @agentmux_notify off
 
 # --- install from a path with spaces, ' , # and $ (SPEC §4): every hook below runs this copy
 INST="$WORK/dir with space 'q' #h \$x"
@@ -75,6 +74,7 @@ done
 
 # --- version / refresh / unknown verbs
 check "version" "0.2.0-draft" "$(AM version)"
+check "no desktop notifications anywhere (Q-004)" "0" "$(cat "$ROOT/bin/agentmux" "$ROOT/agentmux.tmux" "$ROOT"/prototypes/*/*.sh "$ROOT"/adapters/*/* | grep -c -E 'osascript|terminal-notifier|notify-send' || true)"
 check "version extra arg: rc 2" "2" "$(AM version x >/dev/null 2>&1; echo $?)"
 check "refresh extra arg: rc 2" "2" "$(AM refresh --bogus >/dev/null 2>&1; echo $?)"
 check "refresh no args: rc 0" "0" "$(AM refresh >/dev/null 2>&1; echo $?)"
