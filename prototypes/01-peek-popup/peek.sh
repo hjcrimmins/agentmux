@@ -11,6 +11,11 @@
 # hook doesn't mark agents seen just because the cursor passed over them; it's unset on
 # every exit path. `enter` marks the landed-on agent seen with `agentmux seen` (SPEC §5.1).
 #
+# Live updates: fzf listens on a unix socket in $PEEK_DIR, registered in @agentmux_ui_sock
+# with the action to run in @agentmux_ui_reload. `agentmux refresh` POSTs that action when
+# agent state changes, so the list updates while open. --track/--id-nth keep the cursor on
+# the same pane across reloads.
+#
 #   peek.sh                 launch the picker (what the key binding runs)
 #   peek.sh _rows           print fzf rows       (internal, called by fzf)
 #   peek.sh _detail %ID     details pane         (internal)
@@ -57,7 +62,7 @@ detail() {
   [[ $p =~ ^%[0-9]+$ ]] || return 0
   # \037 separator: with IFS=TAB, bash would collapse empty fields (e.g. no reason)
   row=$("$BIN" list | awk -F "$TAB" -v OFS=$'\037' -v p="$p" '$1==p { $1=$1; print }')
-  [ -z "$row" ] && { echo "(agent gone, ctrl-r to refresh)"; return; }
+  [ -z "$row" ] && { echo "(agent gone)"; return; }
   IFS=$'\037' read -r _ st reason harness loc msg age path seen <<<"$row"
   [ "$st" = done ] && [ "$seen" = 1 ] && st="done (seen)"
   local where; where=$(tmux display -p -t "$p" '#{session_name} › #{window_name}' 2>/dev/null)
@@ -154,10 +159,14 @@ export PEEK_DIR
 PEEK_CLIENT=$(tmux display -p '#{client_name}'); export PEEK_CLIENT
 # Q-013: suspend focus-based "seen" while peeking. Must be unset on every exit path,
 # or normal focus tracking would stay off.
-unpeek() { tmux set -gu @agentmux_peeking 2>/dev/null; }
+unpeek() { tmux set -gu @agentmux_peeking \; set -gu @agentmux_ui_sock \; set -gu @agentmux_ui_reload 2>/dev/null; }
 trap 'unpeek; rm -rf "$PEEK_DIR"' EXIT
 trap 'exit 130' INT; trap 'exit 129' HUP; trap 'exit 143' TERM
 tmux set -g @agentmux_peeking "$PEEK_CLIENT"
+UI_SOCK="$PEEK_DIR/fzf.sock"
+UI_RELOAD="reload-sync($SELF _rows)+refresh-preview"
+# `##`: tmux would treat a `#` in the path as a format when the option is read back
+tmux set -g @agentmux_ui_sock "${UI_SOCK//\#/##}" \; set -g @agentmux_ui_reload "${UI_RELOAD//\#/##}"
 # Don't trust $TMUX_PANE inside a popup: on tmux 3.7 it was not the pane the client was on
 # (see NOTES.md). Ask for the client's session, then that session's active pane.
 ORIG_SESSION_NAME=$(tmux list-clients -F '#{client_name}	#{client_session}' | awk -F '\t' -v c="$PEEK_CLIENT" '$1==c{print $2}')
@@ -182,13 +191,14 @@ sel=$("$SELF" _rows | fzf --ansi --delimiter "$TAB" --with-nth 2.. --no-sort --h
   --layout reverse --no-input --disabled --prompt '  ' --pointer '▶' --gutter ' ' \
   --info hidden --no-scrollbar --border none --header-first \
   --header "$("$SELF" _header)" \
+  --listen "$UI_SOCK" --track --id-nth 1 \
   --preview "$SELF _detail {1}" --preview-window "$PREVIEW_WIN" \
   --bind "focus:execute-silent($SELF _peek {1})" \
   --bind "j:down,k:up,g:first,G:last,q:abort" \
   --bind "/:show-input+enable-search+change-prompt(/ )+unbind(j,k,g,G,s,/,q)" \
   --bind "esc:transform($SELF _esc)" \
   --bind "s:execute-silent($SELF _sort)+reload($SELF _rows)+transform-header($SELF _header)" \
-  --bind "ctrl-r:reload($SELF _rows)" \
+  --bind "ctrl-r:reload-sync($SELF _rows)+refresh-preview" \
   | cut -f1)
 
 if [ -n "$sel" ]; then

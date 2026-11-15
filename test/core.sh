@@ -427,6 +427,38 @@ wait_for "0 0 0 0" T show -gv @agentmux_counts
 check "kill-pane hook refreshes" "0 0 0 0" "$(T show -gv @agentmux_counts)"
 check "summary empty" "" "$(T show -gv @agentmux_summary)"
 
+# --- live UI reload: refresh POSTs @agentmux_ui_reload to @agentmux_ui_sock, only on change
+reset_agents
+UIDIR=$(mktemp -d "${TMPDIR:-/tmp}/agentmux-ui.XXXXXX"); UISOCK="$UIDIR/ui.sock"; UILOG="$UIDIR/log"
+python3 -c '
+import socket, sys, os
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8)
+while True:
+    c, _ = s.accept(); d = b""
+    while b"\r\n\r\n" not in d: d += c.recv(4096)
+    h, b = d.split(b"\r\n\r\n", 1)
+    n = int([l.split(b":")[1] for l in h.split(b"\r\n") if l.lower().startswith(b"content-length")][0])
+    while len(b) < n: b += c.recv(4096)
+    open(sys.argv[2], "ab").write(b + b"\n"); c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"); c.close()
+' "$UISOCK" "$UILOG" & UIPID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$UISOCK" ] && break; sleep 0.1; done
+: > "$UILOG"
+T set -g @agentmux_ui_sock "$UISOCK" \; set -g @agentmux_ui_reload 'reload(x)'
+uicount() { grep -c . "$UILOG" 2>/dev/null || true; }
+AM set working --pane "$P1" --harness claude
+wait_for 1 uicount
+check "ui: state change POSTs reload" "1" "$(uicount)"
+check "ui: body is the registered action" "reload(x)" "$(head -1 "$UILOG")"
+AM list >/dev/null; AM refresh; sleep 0.3
+check "ui: list/refresh without change don't POST (no reload loop)" "1" "$(uicount)"
+AM seen --pane "$P1"; wait_for 2 uicount
+check "ui: seen (new seen_ts) POSTs reload" "2" "$(uicount)"
+T set -gu @agentmux_ui_sock \; set -gu @agentmux_ui_reload
+AM set done --pane "$P1" --harness claude; sleep 0.3
+check "ui: no POST once unregistered" "2" "$(uicount)"
+kill "$UIPID" 2>/dev/null || true; wait "$UIPID" 2>/dev/null || true; rm -rf "$UIDIR"
+reset_agents
+
 hangs=$(wc -l <"$HANGS" | tr -d ' ')
 if [ "$hangs" -gt 0 ]; then fail=$((fail+hangs)); echo "FAIL $hangs agentmux call(s) timed out:"; sed 's/^/     /' "$HANGS"; fi
 

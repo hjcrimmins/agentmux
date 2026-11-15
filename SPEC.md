@@ -65,7 +65,8 @@ agentmux clear [--pane PANE_ID]
 - When a pane exits or is killed, tmux hooks run `agentmux refresh`.
 - When a pane gains focus, a tmux hook runs `agentmux seen` for it, unless a picker is peeking or seen-tracking is off (§5.1).
 - **Refresh is serialised.** Recomputing the summary (read every pane, write the global options) runs under the tmux lock `wait-for -L agentmux` / `-U`, so two concurrent `set`s can't leave a stale summary. The wait is bounded (about 1 s). On timeout the lock is assumed stale (a holder died), it is released, and the refresh proceeds. [Q-022]
-- UIs read state and write only `@agentmux_seen_ts` (via `agentmux seen`) and `@agentmux_peeking`.
+- **Live UIs are pushed to, not polled.** After a refresh changes `@agentmux_rev`, agentmux POSTs `@agentmux_ui_reload` to `@agentmux_ui_sock` (backgrounded, 1 s cap, so a harness never waits). A refresh that changes nothing sends nothing, so a UI whose reload itself calls `list` doesn't loop.
+- UIs read state and write only `@agentmux_seen_ts` (via `agentmux seen`), `@agentmux_peeking` and `@agentmux_ui_*`.
 
 ## 5. State storage
 
@@ -95,6 +96,9 @@ All state lives in the tmux server's memory as user options. There are no files.
 | `@agentmux_summary` | refresh | Ready-to-display status-bar text (with tmux style directives). Empty when there is nothing to show (§5.2). |
 | `@agentmux_counts` | refresh | `waiting working done idle` as four space-separated integers. `done` counts **unseen** done; seen done counts as `idle`. |
 | `@agentmux_peeking` | picker | Set (to the client name) while a peek UI is open; unset otherwise. The picker must unset it on every exit path. |
+| `@agentmux_rev` | refresh | Fingerprint of every agent's state, `@agentmux_ts` and `@agentmux_seen_ts`. Changes exactly when something a UI shows (other than age) changed. |
+| `@agentmux_ui_sock` | picker | While a live UI is open: path of its HTTP-over-unix-socket listener (fzf `--listen`) |
+| `@agentmux_ui_reload` | picker | The request body to POST there (an fzf action) when `@agentmux_rev` changes |
 | `@agentmux_bin` | `agentmux.tmux` | Absolute path to the `agentmux` executable |
 
 Writes from a single `set` are sent as one chained tmux command, so they are applied atomically.
