@@ -22,6 +22,7 @@ agentmux: tmux-side state and UI for coding agents running in tmux panes. Harnes
 | `bin/agentmux` | Core CLI (bash + jq). `set`, `clear` (harness verbs); `list`, `seen`, `refresh`, `version`. |
 | `agentmux.tmux` | tmux entry point: `run-shell /path/agentmux.tmux`. Registers hooks and bindings. |
 | `adapters/<harness>/` | Per-harness integration snippets. |
+| `.agents/skills/<name>/SKILL.md` | Agent Skills (cross-harness). `.claude/skills/<name>` symlinks here for Claude Code. Keep `install-agentmux` in sync with the README Install section. |
 | `prototypes/NN-name/` | Throwaway UI experiments. Findings go in `prototypes/NOTES.md`. |
 | `test/core.sh` | Automated tests for the core (isolated tmux server). |
 | `test/sandbox.sh` | Interactive sandbox with fake agents, for trying UIs by hand. |

@@ -1,1 +1,2 @@
-.claude/
+# Agent worktrees (skills under .claude/skills/ are tracked)
+.claude/worktrees/
