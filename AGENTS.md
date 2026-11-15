@@ -19,7 +19,7 @@ agentmux: tmux-side state and UI for coding agents running in tmux panes. Harnes
 
 | Path | What |
 |---|---|
-| `bin/agentmux` | Core CLI (bash + jq). `set`, `clear`, `list`, `refresh`, `version`. |
+| `bin/agentmux` | Core CLI (bash + jq). `set`, `clear` (harness verbs); `list`, `seen`, `refresh`, `version`. |
 | `agentmux.tmux` | tmux entry point: `run-shell /path/agentmux.tmux`. Registers hooks and bindings. |
 | `adapters/<harness>/` | Per-harness integration snippets. |
 | `prototypes/NN-name/` | Throwaway UI experiments. Findings go in `prototypes/NOTES.md`. |
@@ -33,7 +33,7 @@ agentmux: tmux-side state and UI for coding agents running in tmux panes. Harnes
 test/core.sh                 # run automated tests (must pass before finishing a change)
 test/sandbox.sh              # start sandbox, then attach from a terminal *outside* tmux:
 tmux -L agentmux-test attach
-test/sandbox.sh stop         # tear it down
+test/sandbox.sh stop         # tear it down (AGENTMUX_SANDBOX_SOCKET=name for a second sandbox)
 ```
 
 ## Style
